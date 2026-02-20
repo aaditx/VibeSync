@@ -5,57 +5,10 @@ const cors = require('cors');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execSync } = require('child_process');
-const https = require('https');
+const play = require('play-dl');
 
-// -------------------------------------------------------------------
-// AUTO-UPDATE yt-dlp BINARY TO LATEST VERSION ON STARTUP
-// -------------------------------------------------------------------
-const ytDlpPath = path.join(os.tmpdir(), 'yt-dlp');
-
-function downloadLatestYtDlp() {
-  return new Promise((resolve) => {
-    console.log('Downloading latest yt-dlp binary...');
-    const file = fs.createWriteStream(ytDlpPath);
-    const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
-    https.get(url, (res) => {
-      // Follow redirects
-      if (res.statusCode === 302 || res.statusCode === 301) {
-        https.get(res.headers.location, (res2) => {
-          res2.pipe(file);
-          file.on('finish', () => {
-            file.close();
-            try { fs.chmodSync(ytDlpPath, '755'); } catch(e) {}
-            console.log('yt-dlp updated successfully.');
-            resolve(ytDlpPath);
-          });
-        }).on('error', () => resolve(null));
-      } else {
-        res.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          try { fs.chmodSync(ytDlpPath, '755'); } catch(e) {}
-          console.log('yt-dlp updated successfully.');
-          resolve(ytDlpPath);
-        });
-      }
-    }).on('error', (err) => {
-      console.error('Failed to download yt-dlp:', err.message);
-      resolve(null);
-    });
-  });
-}
-
-// Write YouTube cookies from env variable to a temp file (for server deployments)
-let cookiesFilePath = null;
-if (process.env.YOUTUBE_COOKIES) {
-  cookiesFilePath = path.join(os.tmpdir(), 'yt-cookies.txt');
-  fs.writeFileSync(cookiesFilePath, process.env.YOUTUBE_COOKIES);
-  console.log('YouTube cookies loaded from environment.');
-}
-
-// Will hold the youtubedl instance pointing to the latest binary
-let youtubedl = require('youtube-dl-exec');
+// In-memory cache: videoId -> { filePath, title, thumbnail, size }
+const audioCache = new Map();
 
 const app = express();
 app.use(cors());
@@ -72,7 +25,7 @@ const io = new Server(server, {
 });
 
 // -------------------------------------------------------------------
-// STEP 1: EXPRESS ENDPOINT FOR YOUTUBE AUDIO EXTRACTION
+// STEP 1: EXPRESS ENDPOINT FOR YOUTUBE AUDIO EXTRACTION (play-dl)
 // -------------------------------------------------------------------
 app.post('/api/extract-audio', async (req, res) => {
   const { url } = req.body;
@@ -82,81 +35,73 @@ app.post('/api/extract-audio', async (req, res) => {
   }
 
   try {
-    const commonOpts = {
-      noCheckCertificates: true,
-      noWarnings: true,
-      addHeader: ['referer:https://www.youtube.com', 'user-agent:Mozilla/5.0'],
-    };
-    if (cookiesFilePath) commonOpts.cookies = cookiesFilePath;
+    // Get video metadata
+    const info = await play.video_info(url);
+    const details = info.video_details;
+    const videoId = details.id;
+    const title = details.title || 'Unknown Title';
+    const thumbnail =
+      details.thumbnails?.[details.thumbnails.length - 1]?.url || '';
 
-    // Pass 1: get video metadata (title, thumbnail)
-    const info = await youtubedl(url, { ...commonOpts, dumpJson: true });
-
-    // Pass 2: get the actual stream URL using --get-url (most reliable)
-    const FORMAT = 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best';
-    const rawUrl = await youtubedl(url, {
-      ...commonOpts,
-      getUrl: true,
-      format: FORMAT,
-    });
-
-    // getUrl returns a string or array of strings
-    const streamUrl = Array.isArray(rawUrl) ? rawUrl[0] : rawUrl;
-
-    if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) {
-      console.error('getUrl returned unexpected value:', rawUrl);
-      return res.status(500).json({ error: 'Could not extract stream URL.' });
+    // Serve from cache if already downloaded
+    if (audioCache.has(videoId)) {
+      console.log(`Serving cached audio for ${videoId}`);
+      return res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
     }
 
-    const encodedUrl = Buffer.from(streamUrl).toString('base64');
-    res.json({
-      title: info.title,
-      audioUrl: `/api/proxy-audio?url=${encodedUrl}`,
-      thumbnail: info.thumbnail,
+    // Download audio stream to a temp file
+    const filePath = path.join(os.tmpdir(), `vs_${videoId}.webm`);
+    console.log(`Downloading audio for ${videoId}...`);
+    const stream = await play.stream(url, { quality: 2 });
+
+    await new Promise((resolve, reject) => {
+      const writer = fs.createWriteStream(filePath);
+      stream.stream.pipe(writer);
+      writer.on('finish', resolve);
+      writer.on('error', reject);
     });
+
+    const { size } = fs.statSync(filePath);
+    audioCache.set(videoId, { filePath, title, thumbnail, size });
+    console.log(`Audio ready: ${videoId} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+
+    res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
   } catch (error) {
     console.error('Extraction Error:', error.message);
-    res.status(500).json({ error: 'Failed to extract audio stream.' });
+    res.status(500).json({ error: 'Failed to extract audio.' });
   }
 });
 
 // -------------------------------------------------------------------
-// STEP 1b: PROXY AUDIO STREAM (avoids YouTube IP-lock on direct URLs)
+// STEP 1b: SERVE DOWNLOADED AUDIO WITH RANGE SUPPORT
 // -------------------------------------------------------------------
-app.get('/api/proxy-audio', (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).send('Missing url');
+app.get('/api/audio/:videoId', (req, res) => {
+  const { videoId } = req.params;
+  const cached = audioCache.get(videoId);
 
-  try {
-    const decodedUrl = Buffer.from(url, 'base64').toString('utf-8');
-    const proto = decodedUrl.startsWith('https') ? https : require('http');
+  if (!cached) return res.status(404).send('Audio not found');
 
-    const proxyReq = proto.get(decodedUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0',
-        'Referer': 'https://www.youtube.com',
-      },
-    }, (proxyRes) => {
-      res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'audio/webm');
-      res.setHeader('Accept-Ranges', 'bytes');
-      if (proxyRes.headers['content-length']) {
-        res.setHeader('Content-Length', proxyRes.headers['content-length']);
-      }
-      if (proxyRes.headers['content-range']) {
-        res.setHeader('Content-Range', proxyRes.headers['content-range']);
-      }
-      res.status(proxyRes.statusCode);
-      proxyRes.pipe(res);
+  const { filePath, size } = cached;
+  const range = req.headers.range;
+
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', 'audio/webm');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  if (range) {
+    const [startStr, endStr] = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(startStr, 10);
+    const end = endStr ? parseInt(endStr, 10) : size - 1;
+    const chunkSize = end - start + 1;
+
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${size}`,
+      'Content-Length': chunkSize,
     });
-
-    proxyReq.on('error', (err) => {
-      console.error('Proxy error:', err.message);
-      res.status(500).send('Proxy error');
-    });
-
-    req.on('close', () => proxyReq.destroy());
-  } catch (e) {
-    res.status(500).send('Invalid URL');
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.writeHead(200, { 'Content-Length': size });
+    fs.createReadStream(filePath).pipe(res);
   }
 });
 
@@ -260,16 +205,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 4000;
 
-// Download latest yt-dlp first, then start the server
-downloadLatestYtDlp().then((binaryPath) => {
-  if (binaryPath) {
-    youtubedl = require('youtube-dl-exec').create(binaryPath);
-    console.log('Using freshly downloaded yt-dlp binary.');
-  } else {
-    console.log('Falling back to bundled yt-dlp binary.');
-  }
-
-  server.listen(PORT, () => {
-    console.log(`VibeSync Backend running on http://localhost:${PORT}`);
-  });
+server.listen(PORT, () => {
+  console.log(`VibeSync Backend running on http://localhost:${PORT}`);
 });
