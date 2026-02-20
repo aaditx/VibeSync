@@ -97,9 +97,19 @@ app.post('/api/extract-audio', async (req, res) => {
 
     const output = await youtubedl(url, options);
 
-    // Return a proxy URL instead of the direct YouTube stream URL
-    // (YouTube stream URLs are IP-locked to the server, not playable in browser)
-    const encodedUrl = Buffer.from(output.url).toString('base64');
+    // yt-dlp can put the stream URL in several places depending on the format
+    const streamUrl =
+      output.url ||
+      (output.requested_downloads && output.requested_downloads[0] && output.requested_downloads[0].url) ||
+      (output.requested_formats && output.requested_formats[0] && output.requested_formats[0].url) ||
+      (Array.isArray(output.formats) && output.formats.find(f => f.acodec !== 'none' && f.url)?.url);
+
+    if (!streamUrl) {
+      console.error('No stream URL found. Output keys:', Object.keys(output));
+      return res.status(500).json({ error: 'Could not extract stream URL.' });
+    }
+
+    const encodedUrl = Buffer.from(streamUrl).toString('base64');
     res.json({
       title: output.title,
       audioUrl: `/api/proxy-audio?url=${encodedUrl}`,
