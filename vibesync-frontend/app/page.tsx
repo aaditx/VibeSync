@@ -39,6 +39,7 @@ export default function VibeSyncApp() {
   const [guestSearchQuery, setGuestSearchQuery] = useState("");
   const [guestSearchResults, setGuestSearchResults] = useState<SearchResult[]>([]);
   const [isGuestSearching, setIsGuestSearching] = useState(false);
+  const [requestSent, setRequestSent] = useState(false);
 
   const playerRef = useRef<any>(null);
   const isSyncingRef = useRef(false);
@@ -334,7 +335,8 @@ export default function VibeSyncApp() {
     socket.emit("request_track", { roomCode, trackData });
     setGuestSearchResults([]);
     setGuestSearchQuery("");
-    alert("Request sent to host!");
+    setRequestSent(true);
+    setTimeout(() => setRequestSent(false), 3000);
   };
 
   const handleApproveRequest = (index: number, addToQueue: boolean) => {
@@ -429,7 +431,7 @@ export default function VibeSyncApp() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white font-mono p-6 flex flex-col items-center justify-center selection:bg-yellow-400 selection:text-black">
+    <div className="min-h-[100dvh] bg-neutral-950 text-white font-mono p-3 sm:p-6 flex flex-col items-center justify-center selection:bg-yellow-400 selection:text-black">
 
       {/* HIDDEN YOUTUBE PLAYER — opacity:0.001 keeps compositor active; no zIndex:-1 which would kill audio */}
       {track && (
@@ -451,7 +453,7 @@ export default function VibeSyncApp() {
       ))}
 
       {/* HEADER */}
-      <h1 className="text-5xl font-black tracking-tighter uppercase mb-10 border-4 border-white p-4 shadow-[8px_8px_0_0_#ffffff] bg-black">
+      <h1 className="text-3xl sm:text-5xl font-black tracking-tighter uppercase mb-6 sm:mb-10 border-4 border-white p-3 sm:p-4 shadow-[8px_8px_0_0_#ffffff] bg-black">
         Vibe<span className="text-yellow-400">Sync</span>
       </h1>
 
@@ -462,7 +464,8 @@ export default function VibeSyncApp() {
             <h2 className="text-2xl font-bold uppercase border-b-2 border-white pb-2">Your Name</h2>
             <input type="text" placeholder="Enter your name..." maxLength={20} value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              className="w-full bg-black border-4 border-white p-3 text-lg font-bold focus:outline-none focus:border-yellow-400" />
+              autoComplete="nickname" autoCorrect="off" autoCapitalize="words"
+              className="w-full bg-black border-4 border-white p-3 text-base font-bold focus:outline-none focus:border-yellow-400" />
           </div>
           <div className="space-y-4">
             <h2 className="text-2xl font-bold uppercase border-b-2 border-white pb-2">Start a Session</h2>
@@ -476,6 +479,7 @@ export default function VibeSyncApp() {
               <input type="text" placeholder="4-LETTER CODE" maxLength={4} value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
                 onKeyDown={(e) => e.key === "Enter" && handleJoinRoom()}
+                autoComplete="off" autoCorrect="off" autoCapitalize="characters" inputMode="text"
                 className="w-full bg-black border-4 border-white p-3 text-xl font-bold uppercase focus:outline-none focus:border-yellow-400" />
               <button onClick={handleJoinRoom} className="bg-white text-black font-bold uppercase px-6 border-4 border-black hover:bg-gray-200 transition-colors">
                 Join
@@ -485,35 +489,39 @@ export default function VibeSyncApp() {
         </div>
       ) : (
         /* ROOM */
-        <div className="w-full max-w-2xl space-y-6">
+        <div className={`w-full max-w-2xl space-y-6 ${isChatOpen ? 'pb-[70dvh] sm:pb-0' : 'pb-6'}`}>
 
           {/* ROOM INFO BAR */}
-          <div className="flex items-center justify-between bg-black border-4 border-white p-4 shadow-[4px_4px_0_0_#ffffff]">
-            <div className="flex items-center gap-2 flex-wrap">
-              <Users className="text-yellow-400 shrink-0" />
-              <span className="text-xl font-bold uppercase">Room: {roomCode}</span>
+          <div className="bg-black border-4 border-white p-3 shadow-[4px_4px_0_0_#ffffff] space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Users className="text-yellow-400 shrink-0" size={18} />
+                <span className="text-lg font-bold uppercase tracking-widest">Room: {roomCode}</span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button onClick={openChat}
+                  className={`relative text-xs font-bold uppercase px-3 py-2 border-2 transition-colors ${isChatOpen ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-neutral-400 hover:border-white hover:text-white'}`}>
+                  💬 Chat
+                  {unreadCount > 0 && !isChatOpen && (
+                    <span className="absolute -top-2 -right-2 bg-yellow-400 text-black text-xs font-black w-5 h-5 flex items-center justify-center rounded-full border border-black">
+                      {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+                <div className="px-3 py-2 bg-yellow-400 text-black font-bold uppercase text-xs border-2 border-black">
+                  {isHost ? "Host" : "Listener"}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-2">
               <button onClick={() => navigator.clipboard.writeText(roomCode)}
-                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-2 py-1 hover:border-yellow-400">
+                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-3 py-2 hover:border-yellow-400 active:bg-neutral-800">
                 Copy Code
               </button>
               <button onClick={() => navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?join=${roomCode}`)}
-                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-2 py-1 hover:border-yellow-400">
+                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-3 py-2 hover:border-yellow-400 active:bg-neutral-800">
                 Share Link
               </button>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <button onClick={openChat}
-                className={`relative text-xs font-bold uppercase px-3 py-1 border-2 transition-colors ${isChatOpen ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-neutral-400 hover:border-white hover:text-white'}`}>
-                💬 Chat
-                {unreadCount > 0 && !isChatOpen && (
-                  <span className="absolute -top-2 -right-2 bg-yellow-400 text-black text-xs font-black w-5 h-5 flex items-center justify-center rounded-full border border-black">
-                    {unreadCount > 9 ? '9+' : unreadCount}
-                  </span>
-                )}
-              </button>
-              <div className="px-3 py-1 bg-yellow-400 text-black font-bold uppercase text-sm border-2 border-black">
-                {isHost ? "Host" : "Listener"}
-              </div>
             </div>
           </div>
 
@@ -557,7 +565,8 @@ export default function VibeSyncApp() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                  className="w-full bg-black border-2 border-white p-2 text-sm focus:outline-none focus:border-yellow-400" />
+                  autoComplete="off" autoCorrect="off"
+                  className="w-full bg-black border-2 border-white p-2 text-base focus:outline-none focus:border-yellow-400" />
                 <button onClick={handleSearch} disabled={isSearching}
                   className="bg-yellow-400 text-black font-bold uppercase px-4 border-2 border-black hover:bg-yellow-300 disabled:opacity-50 shrink-0">
                   {isSearching ? "..." : "Search"}
@@ -598,7 +607,8 @@ export default function VibeSyncApp() {
                   value={guestSearchQuery}
                   onChange={(e) => setGuestSearchQuery(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleGuestSearch()}
-                  className="w-full bg-black border-2 border-white p-2 text-sm focus:outline-none focus:border-yellow-400" />
+                  autoComplete="off" autoCorrect="off"
+                  className="w-full bg-black border-2 border-white p-2 text-base focus:outline-none focus:border-yellow-400" />
                 <button onClick={handleGuestSearch} disabled={isGuestSearching}
                   className="bg-neutral-700 text-white font-bold uppercase px-4 border-2 border-neutral-500 hover:bg-neutral-600 disabled:opacity-50 shrink-0">
                   {isGuestSearching ? "..." : "Search"}
@@ -614,11 +624,16 @@ export default function VibeSyncApp() {
                         <p className="text-yellow-400 text-xs">{r.channel}</p>
                       </div>
                       <button onClick={() => handleRequestTrack(r)}
-                        className="bg-neutral-700 text-white font-bold text-xs uppercase px-2 py-1 border border-neutral-500 hover:bg-neutral-600 shrink-0">
+                        className="bg-neutral-700 text-white font-bold text-xs uppercase px-3 py-2 border border-neutral-500 hover:bg-neutral-600 active:bg-neutral-500 shrink-0">
                         📩 Request
                       </button>
                     </div>
                   ))}
+                </div>
+              )}
+              {requestSent && (
+                <div className="border-t-2 border-green-500 bg-green-950 px-4 py-3 text-green-400 text-xs font-bold uppercase tracking-widest">
+                  ✓ Request sent to host!
                 </div>
               )}
             </div>
@@ -662,7 +677,7 @@ export default function VibeSyncApp() {
           {track ? (
             <div className="bg-black border-4 border-white p-6 shadow-[8px_8px_0_0_#ffffff] space-y-6">
               <div className="flex items-center gap-6">
-                <img src={track.thumbnail} alt="Thumbnail" className="w-32 h-24 object-cover border-4 border-white shadow-[4px_4px_0_0_#ffffff]" />
+                <img src={track.thumbnail} alt="Thumbnail" className="w-20 h-16 sm:w-32 sm:h-24 object-cover border-4 border-white shadow-[4px_4px_0_0_#ffffff] shrink-0" />
                 <div className="overflow-hidden flex-1">
                   <h3 className="text-xl font-bold truncate">{track.title}</h3>
                   {track.channel && <p className="text-neutral-400 text-sm mt-1">{track.channel}</p>}
@@ -744,32 +759,17 @@ export default function VibeSyncApp() {
         </div>
       )}
 
-      {/* FLOATING CHAT PANEL — fixed overlay, works on mobile & desktop */}
+      {/* FLOATING CHAT PANEL — full-width bottom sheet on mobile, corner panel on sm+ */}
       {inRoom && isChatOpen && (
-        <div
-          className="fixed z-50 flex flex-col bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#facc15]"
-          style={{
-            bottom: '1rem',
-            right: '1rem',
-            width: 'min(380px, calc(100vw - 2rem))',
-            height: 'min(420px, 60vh)',
-            maxHeight: 'calc(100dvh - 2rem)',
-          }}
+        <div className="fixed z-50 flex flex-col bg-neutral-900 border-t-4 border-white sm:border-4 sm:shadow-[4px_4px_0_0_#facc15] left-0 right-0 bottom-0 sm:left-auto sm:right-4 sm:bottom-4 sm:w-[380px]"
+          style={{ height: 'min(420px, 65dvh)' }}
         >
-          {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b-2 border-neutral-700 shrink-0">
             <h3 className="text-xs font-bold uppercase text-yellow-400 tracking-widest">💬 Room Chat</h3>
-            <button onClick={() => setIsChatOpen(false)}
-              className="text-neutral-400 hover:text-white font-bold text-lg leading-none px-1">
-              ✕
-            </button>
+            <button onClick={() => setIsChatOpen(false)} className="text-neutral-400 hover:text-white font-bold text-lg p-2 -mr-2">✕</button>
           </div>
-
-          {/* Messages */}
           <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
-            {chatMessages.length === 0 && (
-              <p className="text-neutral-600 text-xs text-center uppercase mt-6">No messages yet. Say something!</p>
-            )}
+            {chatMessages.length === 0 && <p className="text-neutral-600 text-xs text-center uppercase mt-6">No messages yet. Say something!</p>}
             {chatMessages.map((msg, i) => (
               <div key={i} className="text-sm break-words">
                 <span className="font-bold text-yellow-400">{msg.name}: </span>
@@ -778,23 +778,14 @@ export default function VibeSyncApp() {
             ))}
             <div ref={chatEndRef} />
           </div>
-
-          {/* Input */}
-          <div className="flex gap-0 border-t-2 border-neutral-700 shrink-0">
-            <input
-              type="text"
-              placeholder="Type a message..."
-              maxLength={200}
-              value={chatInput}
+          <div className="flex border-t-2 border-neutral-700 shrink-0">
+            <input type="text" placeholder="Type a message..." maxLength={200} value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-              className="flex-1 bg-black p-3 text-sm focus:outline-none min-w-0"
-            />
-            <button
-              onClick={handleSendMessage}
-              className="bg-yellow-400 text-black font-bold uppercase px-4 border-l-2 border-neutral-700 hover:bg-yellow-300 shrink-0 text-sm">
-              Send
-            </button>
+              autoComplete="off" autoCorrect="off"
+              className="flex-1 bg-black p-3 text-base sm:text-sm focus:outline-none min-w-0" />
+            <button onClick={handleSendMessage}
+              className="bg-yellow-400 text-black font-bold uppercase px-5 border-l-2 border-neutral-700 hover:bg-yellow-300 active:bg-yellow-500 shrink-0 text-sm">Send</button>
           </div>
         </div>
       )}
