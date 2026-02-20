@@ -3,6 +3,17 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const youtubedl = require('youtube-dl-exec');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// Write YouTube cookies from env variable to a temp file (for server deployments)
+let cookiesFilePath = null;
+if (process.env.YOUTUBE_COOKIES) {
+  cookiesFilePath = path.join(os.tmpdir(), 'yt-cookies.txt');
+  fs.writeFileSync(cookiesFilePath, process.env.YOUTUBE_COOKIES);
+  console.log('YouTube cookies loaded from environment.');
+}
 
 const app = express();
 app.use(cors());
@@ -29,14 +40,20 @@ app.post('/api/extract-audio', async (req, res) => {
   }
 
   try {
-    const output = await youtubedl(url, {
+    const options = {
       dumpJson: true,
       format: 'bestaudio',
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
-      addHeader: ['referer:https://www.youtube.com', 'user-agent:googlebot'],
-    });
+      addHeader: ['referer:https://www.youtube.com', 'user-agent:Mozilla/5.0'],
+    };
+
+    if (cookiesFilePath) {
+      options.cookies = cookiesFilePath;
+    }
+
+    const output = await youtubedl(url, options);
 
     res.json({
       title: output.title,
