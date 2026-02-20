@@ -66,19 +66,22 @@ const generateRoomCode = () => {
   return code;
 };
 
+// Bug fix: defined outside connection handler so it's not recreated per socket
+const getRoomUsers = (roomCode) => {
+  const room = rooms[roomCode];
+  if (!room) return [];
+  return Array.from(room.users.entries()).map(([id, name]) => ({
+    name,
+    isHost: id === room.host,
+  }));
+};
+
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  const getRoomUsers = (roomCode) => {
-    const room = rooms[roomCode];
-    if (!room) return [];
-    return Array.from(room.users.entries()).map(([id, name]) => ({
-      name,
-      isHost: id === room.host,
-    }));
-  };
-
+  // Bug fix: typeof callback guard prevents crash if called without ack
   socket.on('create_room', ({ name } = {}, callback) => {
+    if (typeof callback !== 'function') return;
     const displayName = (name || 'Host').trim().slice(0, 20);
     let roomCode;
     do { roomCode = generateRoomCode(); } while (rooms[roomCode]);
@@ -91,6 +94,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('join_room', ({ code, name } = {}, callback) => {
+    if (typeof callback !== 'function') return;
     const roomCode = (code || '').toUpperCase();
     const displayName = (name || 'Listener').trim().slice(0, 20);
     if (rooms[roomCode]) {
@@ -99,32 +103,33 @@ io.on('connection', (socket) => {
       console.log(`${displayName} (${socket.id}) joined room ${roomCode}`);
       callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack });
       io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
-      socket.to(roomCode).emit('user_joined', { userId: socket.id });
+      socket.to(roomCode).emit('user_joined'); // Bug fix: removed unused userId payload
     } else {
       callback({ success: false, message: 'Room not found or expired.' });
     }
   });
 
-  socket.on('load_track', ({ roomCode, trackData }) => {
+  // Bug fix: = {} defaults prevent destructuring crash on malformed payloads
+  socket.on('load_track', ({ roomCode, trackData } = {}) => {
     if (rooms[roomCode] && rooms[roomCode].host === socket.id) {
       rooms[roomCode].currentTrack = trackData;
       socket.to(roomCode).emit('load_track', trackData);
     }
   });
 
-  socket.on('play', ({ roomCode, time }) => {
+  socket.on('play', ({ roomCode, time } = {}) => {
     if (rooms[roomCode] && rooms[roomCode].host === socket.id) {
       socket.to(roomCode).emit('play', { time });
     }
   });
 
-  socket.on('pause', ({ roomCode, time }) => {
+  socket.on('pause', ({ roomCode, time } = {}) => {
     if (rooms[roomCode] && rooms[roomCode].host === socket.id) {
       socket.to(roomCode).emit('pause', { time });
     }
   });
 
-  socket.on('seek', ({ roomCode, time }) => {
+  socket.on('seek', ({ roomCode, time } = {}) => {
     if (rooms[roomCode] && rooms[roomCode].host === socket.id) {
       socket.to(roomCode).emit('seek', { time });
     }

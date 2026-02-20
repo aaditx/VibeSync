@@ -226,15 +226,24 @@ export default function VibeSyncApp() {
   const handlePlay = () => {
     if (!playerRef.current) return;
     const time = playerRef.current.getCurrentTime();
+    // Bug fix: set isSyncingRef BEFORE playVideo() to prevent onStateChange
+    // from double-emitting play back to the room
+    isSyncingRef.current = true;
+    setIsPlaying(true);
     playerRef.current.playVideo();
     socket.emit("play", { roomCode, time });
+    setTimeout(() => { isSyncingRef.current = false; }, 500);
   };
 
   const handlePause = () => {
     if (!playerRef.current) return;
     const time = playerRef.current.getCurrentTime();
+    // Bug fix: same as handlePlay — prevent double-emit via onStateChange
+    isSyncingRef.current = true;
+    setIsPlaying(false);
     playerRef.current.pauseVideo();
     socket.emit("pause", { roomCode, time });
+    setTimeout(() => { isSyncingRef.current = false; }, 500);
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -288,8 +297,11 @@ export default function VibeSyncApp() {
     }
   };
 
-  const formatTime = (s: number) =>
-    `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  // Bug fix: guard against NaN when duration/currentTime not yet loaded
+  const formatTime = (s: number) => {
+    s = Math.max(0, s || 0);
+    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  };
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white font-mono p-6 flex flex-col items-center justify-center selection:bg-yellow-400 selection:text-black">
