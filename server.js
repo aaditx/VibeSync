@@ -86,7 +86,9 @@ app.post('/api/extract-audio', async (req, res) => {
     // Serve from cache if already downloaded
     if (audioCache.has(videoId) && fs.existsSync(audioCache.get(videoId).filePath)) {
       console.log(`Cache hit: ${videoId}`);
-      return res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
+      const host = req.get('host');
+      const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+      return res.json({ title, audioUrl: `${protocol}://${host}/api/audio/${videoId}`, thumbnail });
     }
 
     // Download audio to temp file via yt-dlp
@@ -124,7 +126,10 @@ app.post('/api/extract-audio', async (req, res) => {
     audioCache.set(videoId, { filePath: actualFile, ext, size });
     console.log(`Audio ready: ${videoId} (${(size / 1024 / 1024).toFixed(1)} MB, .${ext})`);
 
-    res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
+    const host = req.get('host');
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const absoluteAudioUrl = `${protocol}://${host}/api/audio/${videoId}`;
+    res.json({ title, audioUrl: absoluteAudioUrl, thumbnail });
   } catch (error) {
     console.error('Extraction Error:', error.message);
     res.status(500).json({ error: 'Failed to extract audio.' });

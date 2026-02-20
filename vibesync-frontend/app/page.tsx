@@ -102,11 +102,15 @@ export default function VibeSyncApp() {
     if (!youtubeUrl) return;
     setIsLoading(true);
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
       const res = await fetch(`${BACKEND_URL}/api/extract-audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: youtubeUrl }),
+        signal: controller.signal,
       });
+      clearTimeout(timeout);
       const data = await res.json();
       
       if (data.error) throw new Error(data.error);
@@ -114,7 +118,11 @@ export default function VibeSyncApp() {
       setTrack(data);
       socket.emit("load_track", { roomCode, trackData: data });
     } catch (error: any) {
-      alert("Failed to load track: " + error.message);
+      if (error.name === "AbortError") {
+        alert("Request timed out. The server may be waking up — please try again in 30 seconds.");
+      } else {
+        alert("Failed to load track: " + error.message);
+      }
     } finally {
       setIsLoading(false);
       setYoutubeUrl("");
@@ -199,7 +207,7 @@ export default function VibeSyncApp() {
                 disabled={isLoading}
                 className="bg-yellow-400 text-black font-bold uppercase px-4 border-2 border-black hover:bg-yellow-300 disabled:opacity-50"
               >
-                {isLoading ? "Loading..." : "Load"}
+                {isLoading ? "Downloading... (~15s)" : "Load"}
               </button>
             </div>
           )}
