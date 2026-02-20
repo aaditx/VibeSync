@@ -42,7 +42,7 @@ app.post('/api/extract-audio', async (req, res) => {
   try {
     const options = {
       dumpJson: true,
-      format: 'bestaudio',
+      format: 'bestaudio/best',
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
