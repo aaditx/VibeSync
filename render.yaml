@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: vibesync-backend
+    env: node
+    buildCommand: npm install && ./node_modules/.bin/yt-dlp --update-to yt-dlp@latest || true
+    startCommand: node server.js
+    envVars:
+      - key: FRONTEND_URL
+        value: "*"

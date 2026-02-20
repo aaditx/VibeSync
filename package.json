@@ -4,6 +4,7 @@
   "description": "",
   "main": "server.js",
   "scripts": {
+    "build": "node node_modules/youtube-dl-exec/scripts/postinstall.js || true",
     "start": "node server.js"
   },
   "engines": {
