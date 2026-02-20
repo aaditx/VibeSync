@@ -33,6 +33,8 @@ export default function VibeSyncApp() {
   const isPlayingRef = useRef(false);
   // Stores a play command that arrived before the player was ready
   const pendingPlayRef = useRef<number | null>(null);
+  // Tracks whether we were playing before the tab was hidden (YouTube auto-pauses on hide)
+  const wasPlayingOnHideRef = useRef(false);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -143,18 +145,14 @@ export default function VibeSyncApp() {
   // --- VISIBILITY CHANGE: resume playback if tab returns while we should be playing ---
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && isPlayingRef.current && playerRef.current) {
-        // Small delay to let browser re-activate the iframe context
+      if (document.visibilityState === 'hidden') {
+        // Snapshot playing state before YouTube auto-pauses the iframe
+        wasPlayingOnHideRef.current = isPlayingRef.current;
+      } else if (document.visibilityState === 'visible' && wasPlayingOnHideRef.current && playerRef.current) {
+        wasPlayingOnHideRef.current = false;
+        // Give the iframe time to re-activate in the compositor before resuming
         setTimeout(() => {
-          try {
-            const state = playerRef.current?.getPlayerState?.();
-            // YT.PlayerState.PAUSED = 2
-            if (state === 2 || state === -1) {
-              playerRef.current.playVideo();
-            }
-          } catch {
-            // player may not be ready; ignore
-          }
+          try { playerRef.current?.playVideo(); } catch { /* ignore */ }
         }, 300);
       }
     };
@@ -257,6 +255,8 @@ export default function VibeSyncApp() {
       setDuration(e.target.getDuration() || 0);
       if (isHost) socket.emit("play", { roomCode, time: e.target.getCurrentTime() });
     } else if (e.data === YT_PAUSED) {
+      // YouTube auto-pauses when tab goes hidden — don't treat this as a real pause
+      if (document.hidden) return;
       setIsPlaying(false);
       if (isHost) socket.emit("pause", { roomCode, time: e.target.getCurrentTime() });
     }
