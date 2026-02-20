@@ -5,10 +5,47 @@ const cors = require('cors');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const https = require('https');
+const { execFile } = require('child_process');
 const play = require('play-dl');
 
 // In-memory cache: videoId -> { filePath, title, thumbnail, size }
 const audioCache = new Map();
+
+// -------------------------------------------------------------------
+// AUTO-DOWNLOAD LATEST yt-dlp BINARY ON STARTUP
+// -------------------------------------------------------------------
+const isWin = process.platform === 'win32';
+const ytDlpFilename = isWin ? 'yt-dlp.exe' : 'yt-dlp';
+const ytDlpUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${ytDlpFilename}`;
+const ytDlpPath = path.join(os.tmpdir(), ytDlpFilename);
+let ytDlpReady = false;
+
+function downloadLatestYtDlp() {
+  return new Promise((resolve) => {
+    console.log(`Downloading latest yt-dlp binary (${ytDlpFilename})...`);
+    const file = fs.createWriteStream(ytDlpPath);
+
+    function doGet(targetUrl) {
+      https.get(targetUrl, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          return doGet(res.headers.location);
+        }
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          try { fs.chmodSync(ytDlpPath, '755'); } catch (e) {}
+          console.log('yt-dlp downloaded successfully.');
+          resolve(true);
+        });
+      }).on('error', (err) => {
+        console.error('yt-dlp download error:', err.message);
+        resolve(false);
+      });
+    }
+    doGet(ytDlpUrl);
+  });
+}
 
 const app = express();
 app.use(cors());
@@ -25,7 +62,7 @@ const io = new Server(server, {
 });
 
 // -------------------------------------------------------------------
-// STEP 1: EXPRESS ENDPOINT FOR YOUTUBE AUDIO EXTRACTION (play-dl)
+// STEP 1: EXPRESS ENDPOINT FOR YOUTUBE AUDIO EXTRACTION
 // -------------------------------------------------------------------
 app.post('/api/extract-audio', async (req, res) => {
   const { url } = req.body;
@@ -34,36 +71,58 @@ app.post('/api/extract-audio', async (req, res) => {
     return res.status(400).json({ error: 'YouTube URL is required' });
   }
 
+  if (!ytDlpReady) {
+    return res.status(503).json({ error: 'Server is still starting up, please try again in a moment.' });
+  }
+
   try {
-    // Get video metadata
+    // Get metadata via play-dl (title, thumbnail)
     const info = await play.video_info(url);
     const details = info.video_details;
     const videoId = details.id;
     const title = details.title || 'Unknown Title';
-    const thumbnail =
-      details.thumbnails?.[details.thumbnails.length - 1]?.url || '';
+    const thumbnail = details.thumbnails?.[details.thumbnails.length - 1]?.url || '';
 
     // Serve from cache if already downloaded
-    if (audioCache.has(videoId)) {
-      console.log(`Serving cached audio for ${videoId}`);
+    if (audioCache.has(videoId) && fs.existsSync(audioCache.get(videoId).filePath)) {
+      console.log(`Cache hit: ${videoId}`);
       return res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
     }
 
-    // Download audio stream to a temp file
-    const filePath = path.join(os.tmpdir(), `vs_${videoId}.webm`);
-    console.log(`Downloading audio for ${videoId}...`);
-    const stream = await play.stream(url, { quality: 2 });
+    // Download audio to temp file via yt-dlp
+    const filePath = path.join(os.tmpdir(), `vs_${videoId}.m4a`);
+    console.log(`Downloading audio for: ${title}`);
+
+    const args = [
+      url,
+      '-f', 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+      '-o', filePath,
+      '--no-part',
+      '--no-playlist',
+      '--quiet',
+      '--no-warnings',
+    ];
+    if (process.env.YOUTUBE_COOKIES) {
+      const cookiePath = path.join(os.tmpdir(), 'cookies.txt');
+      if (!fs.existsSync(cookiePath)) fs.writeFileSync(cookiePath, process.env.YOUTUBE_COOKIES);
+      args.push('--cookies', cookiePath);
+    }
 
     await new Promise((resolve, reject) => {
-      const writer = fs.createWriteStream(filePath);
-      stream.stream.pipe(writer);
-      writer.on('finish', resolve);
-      writer.on('error', reject);
+      execFile(ytDlpPath, args, { timeout: 120000 }, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve();
+      });
     });
 
-    const { size } = fs.statSync(filePath);
-    audioCache.set(videoId, { filePath, title, thumbnail, size });
-    console.log(`Audio ready: ${videoId} (${(size / 1024 / 1024).toFixed(1)} MB)`);
+    // yt-dlp may choose a different extension; find the actual file
+    const actualFile = [filePath, filePath.replace('.m4a', '.webm'), filePath.replace('.m4a', '.opus')]
+      .find(f => fs.existsSync(f)) || filePath;
+
+    const { size } = fs.statSync(actualFile);
+    const ext = path.extname(actualFile).slice(1) || 'm4a';
+    audioCache.set(videoId, { filePath: actualFile, ext, size });
+    console.log(`Audio ready: ${videoId} (${(size / 1024 / 1024).toFixed(1)} MB, .${ext})`);
 
     res.json({ title, audioUrl: `/api/audio/${videoId}`, thumbnail });
   } catch (error) {
@@ -81,11 +140,13 @@ app.get('/api/audio/:videoId', (req, res) => {
 
   if (!cached) return res.status(404).send('Audio not found');
 
-  const { filePath, size } = cached;
+  const { filePath, ext, size } = cached;
+  const mimeTypes = { m4a: 'audio/mp4', webm: 'audio/webm', opus: 'audio/ogg', mp3: 'audio/mpeg' };
+  const contentType = mimeTypes[ext] || 'audio/webm';
   const range = req.headers.range;
 
   res.setHeader('Accept-Ranges', 'bytes');
-  res.setHeader('Content-Type', 'audio/webm');
+  res.setHeader('Content-Type', contentType);
   res.setHeader('Access-Control-Allow-Origin', '*');
 
   if (range) {
@@ -205,6 +266,11 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 4000;
 
-server.listen(PORT, () => {
-  console.log(`VibeSync Backend running on http://localhost:${PORT}`);
+// Download yt-dlp binary first, then start server
+downloadLatestYtDlp().then((ok) => {
+  ytDlpReady = ok;
+  if (!ok) console.warn('yt-dlp unavailable — audio extraction will fail.');
+  server.listen(PORT, () => {
+    console.log(`VibeSync Backend running on http://localhost:${PORT}`);
+  });
 });
