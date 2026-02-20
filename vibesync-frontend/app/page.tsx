@@ -150,10 +150,16 @@ export default function VibeSyncApp() {
         wasPlayingOnHideRef.current = isPlayingRef.current;
       } else if (document.visibilityState === 'visible' && wasPlayingOnHideRef.current && playerRef.current) {
         wasPlayingOnHideRef.current = false;
-        // Give the iframe time to re-activate in the compositor before resuming
-        setTimeout(() => {
-          try { playerRef.current?.playVideo(); } catch { /* ignore */ }
-        }, 300);
+        // Retry resume — iframe compositor re-activation can take varying time
+        [200, 600, 1200].forEach((delay) => {
+          setTimeout(() => {
+            try {
+              if (playerRef.current?.getPlayerState?.() !== 1) {
+                playerRef.current?.playVideo();
+              }
+            } catch { /* ignore */ }
+          }, delay);
+        });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -279,9 +285,9 @@ export default function VibeSyncApp() {
   return (
     <div className="min-h-screen bg-neutral-950 text-white font-mono p-6 flex flex-col items-center justify-center selection:bg-yellow-400 selection:text-black">
 
-      {/* HIDDEN YOUTUBE PLAYER — full 320x180 at opacity:0 so browser treats it as active media */}
+      {/* HIDDEN YOUTUBE PLAYER — opacity:0.001 keeps compositor active; no zIndex:-1 which would kill audio */}
       {track && (
-        <div style={{ position: "fixed", bottom: 0, right: 0, width: 320, height: 180, opacity: 0, pointerEvents: "none", zIndex: -1 }}>
+        <div style={{ position: "fixed", bottom: 0, right: 0, width: 320, height: 180, opacity: 0.001, pointerEvents: "none", zIndex: 0 }}>
           <YouTube
             videoId={track.videoId}
             opts={{ width: "320", height: "180", playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, playsinline: 1 } }}
