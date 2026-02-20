@@ -62,6 +62,11 @@ const io = new Server(server, {
 });
 
 // -------------------------------------------------------------------
+// HEALTH CHECK (for UptimeRobot / status monitoring)
+// -------------------------------------------------------------------
+app.get('/', (req, res) => res.json({ status: 'ok', service: 'VibeSync Backend' }));
+
+// -------------------------------------------------------------------
 // STEP 1: EXPRESS ENDPOINT FOR YOUTUBE AUDIO EXTRACTION
 // -------------------------------------------------------------------
 app.post('/api/extract-audio', async (req, res) => {
