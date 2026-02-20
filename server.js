@@ -69,23 +69,36 @@ const generateRoomCode = () => {
 io.on('connection', (socket) => {
   console.log(`User connected: ${socket.id}`);
 
-  socket.on('create_room', (callback) => {
+  const getRoomUsers = (roomCode) => {
+    const room = rooms[roomCode];
+    if (!room) return [];
+    return Array.from(room.users.entries()).map(([id, name]) => ({
+      name,
+      isHost: id === room.host,
+    }));
+  };
+
+  socket.on('create_room', ({ name } = {}, callback) => {
+    const displayName = (name || 'Host').trim().slice(0, 20);
     let roomCode;
     do { roomCode = generateRoomCode(); } while (rooms[roomCode]);
-    rooms[roomCode] = { host: socket.id, users: new Set(), currentTrack: null };
-    rooms[roomCode].users.add(socket.id);
+    rooms[roomCode] = { host: socket.id, users: new Map(), currentTrack: null };
+    rooms[roomCode].users.set(socket.id, displayName);
     socket.join(roomCode);
-    console.log(`Room ${roomCode} created by ${socket.id}`);
+    console.log(`Room ${roomCode} created by ${displayName} (${socket.id})`);
     callback({ success: true, roomCode, isHost: true });
+    io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
   });
 
-  socket.on('join_room', (code, callback) => {
-    const roomCode = code.toUpperCase();
+  socket.on('join_room', ({ code, name } = {}, callback) => {
+    const roomCode = (code || '').toUpperCase();
+    const displayName = (name || 'Listener').trim().slice(0, 20);
     if (rooms[roomCode]) {
-      rooms[roomCode].users.add(socket.id);
+      rooms[roomCode].users.set(socket.id, displayName);
       socket.join(roomCode);
-      console.log(`User ${socket.id} joined room ${roomCode}`);
+      console.log(`${displayName} (${socket.id}) joined room ${roomCode}`);
       callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack });
+      io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
       socket.to(roomCode).emit('user_joined', { userId: socket.id });
     } else {
       callback({ success: false, message: 'Room not found or expired.' });
@@ -125,10 +138,13 @@ io.on('connection', (socket) => {
         if (room.users.size === 0) {
           delete rooms[roomCode];
           console.log(`Room ${roomCode} deleted (empty).`);
-        } else if (room.host === socket.id) {
-          room.host = Array.from(room.users)[0];
-          io.to(room.host).emit('host_transferred', {});
-          console.log(`Host transferred in room ${roomCode}`);
+        } else {
+          if (room.host === socket.id) {
+            room.host = Array.from(room.users.keys())[0];
+            io.to(room.host).emit('host_transferred', {});
+            console.log(`Host transferred in room ${roomCode}`);
+          }
+          io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
         }
       }
     }

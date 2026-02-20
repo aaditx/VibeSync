@@ -12,10 +12,12 @@ type Track = { videoId: string; title: string; thumbnail: string; channel?: stri
 type SearchResult = { videoId: string; title: string; channel: string; thumbnail: string };
 
 export default function VibeSyncApp() {
+  const [displayName, setDisplayName] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [inRoom, setInRoom] = useState(false);
   const [roomCode, setRoomCode] = useState("");
+  const [roomUsers, setRoomUsers] = useState<{ name: string; isHost: boolean }[]>([]);
 
   const [track, setTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -91,6 +93,10 @@ export default function VibeSyncApp() {
       alert("The host left. You are now the host!");
     });
 
+    socket.on("room_users", (users: { name: string; isHost: boolean }[]) => {
+      setRoomUsers(users);
+    });
+
     return () => {
       socket.off("user_joined");
       socket.off("load_track");
@@ -98,6 +104,7 @@ export default function VibeSyncApp() {
       socket.off("pause");
       socket.off("seek");
       socket.off("host_transferred");
+      socket.off("room_users");
     };
   }, [isHost, roomCode, track, isPlaying]);
 
@@ -169,7 +176,8 @@ export default function VibeSyncApp() {
   // --- LOBBY ---
   const handleCreateRoom = () => {
     if (!socket.connected) { alert("Not connected to server. Please wait and try again."); return; }
-    socket.emit("create_room", (res: any) => {
+    const name = displayName.trim() || "Host";
+    socket.emit("create_room", { name }, (res: any) => {
       if (res.success) { setRoomCode(res.roomCode); setIsHost(res.isHost); setInRoom(true); }
     });
   };
@@ -177,7 +185,8 @@ export default function VibeSyncApp() {
   const handleJoinRoom = () => {
     if (!joinCode) return;
     if (!socket.connected) { alert("Not connected to server. Retrying connection..."); socket.connect(); return; }
-    socket.emit("join_room", joinCode, (res: any) => {
+    const name = displayName.trim() || "Listener";
+    socket.emit("join_room", { code: joinCode, name }, (res: any) => {
       if (res.success) {
         setRoomCode(res.roomCode);
         setIsHost(res.isHost);
@@ -306,6 +315,12 @@ export default function VibeSyncApp() {
         /* LOBBY */
         <div className="w-full max-w-md space-y-8 bg-neutral-900 border-4 border-white p-8 shadow-[8px_8px_0_0_#ffffff]">
           <div className="space-y-4">
+            <h2 className="text-2xl font-bold uppercase border-b-2 border-white pb-2">Your Name</h2>
+            <input type="text" placeholder="Enter your name..." maxLength={20} value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full bg-black border-4 border-white p-3 text-lg font-bold focus:outline-none focus:border-yellow-400" />
+          </div>
+          <div className="space-y-4">
             <h2 className="text-2xl font-bold uppercase border-b-2 border-white pb-2">Start a Session</h2>
             <button onClick={handleCreateRoom} className="w-full bg-yellow-400 text-black font-bold text-xl uppercase py-4 border-4 border-black hover:bg-yellow-300 transition-colors shadow-[4px_4px_0_0_#ffffff] active:translate-x-1 active:translate-y-1 active:shadow-none">
               Create Room
@@ -338,6 +353,24 @@ export default function VibeSyncApp() {
               {isHost ? "Host" : "Listener"}
             </div>
           </div>
+
+          {/* ACTIVE USERS */}
+          {roomUsers.length > 0 && (
+            <div className="bg-neutral-900 border-4 border-white p-4 shadow-[4px_4px_0_0_#ffffff]">
+              <h3 className="text-xs font-bold uppercase text-neutral-400 mb-3 tracking-widest">In this room — {roomUsers.length}</h3>
+              <div className="flex flex-wrap gap-2">
+                {roomUsers.map((u, i) => (
+                  <div key={i} className={`flex items-center gap-2 px-3 py-1.5 border-2 text-sm font-bold ${
+                    u.isHost ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-white'
+                  }`}>
+                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse shrink-0" />
+                    {u.name}
+                    {u.isHost && <span className="text-xs opacity-70 ml-1">HOST</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* HOST SEARCH */}
           {isHost && (
