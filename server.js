@@ -97,14 +97,57 @@ app.post('/api/extract-audio', async (req, res) => {
 
     const output = await youtubedl(url, options);
 
+    // Return a proxy URL instead of the direct YouTube stream URL
+    // (YouTube stream URLs are IP-locked to the server, not playable in browser)
+    const encodedUrl = Buffer.from(output.url).toString('base64');
     res.json({
       title: output.title,
-      audioUrl: output.url, 
+      audioUrl: `/api/proxy-audio?url=${encodedUrl}`,
       thumbnail: output.thumbnail,
     });
   } catch (error) {
     console.error('Extraction Error:', error.message);
     res.status(500).json({ error: 'Failed to extract audio stream.' });
+  }
+});
+
+// -------------------------------------------------------------------
+// STEP 1b: PROXY AUDIO STREAM (avoids YouTube IP-lock on direct URLs)
+// -------------------------------------------------------------------
+app.get('/api/proxy-audio', (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send('Missing url');
+
+  try {
+    const decodedUrl = Buffer.from(url, 'base64').toString('utf-8');
+    const proto = decodedUrl.startsWith('https') ? https : require('http');
+
+    const proxyReq = proto.get(decodedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://www.youtube.com',
+      },
+    }, (proxyRes) => {
+      res.setHeader('Content-Type', proxyRes.headers['content-type'] || 'audio/webm');
+      res.setHeader('Accept-Ranges', 'bytes');
+      if (proxyRes.headers['content-length']) {
+        res.setHeader('Content-Length', proxyRes.headers['content-length']);
+      }
+      if (proxyRes.headers['content-range']) {
+        res.setHeader('Content-Range', proxyRes.headers['content-range']);
+      }
+      res.status(proxyRes.statusCode);
+      proxyRes.pipe(res);
+    });
+
+    proxyReq.on('error', (err) => {
+      console.error('Proxy error:', err.message);
+      res.status(500).send('Proxy error');
+    });
+
+    req.on('close', () => proxyReq.destroy());
+  } catch (e) {
+    res.status(500).send('Invalid URL');
   }
 });
 
