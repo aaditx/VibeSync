@@ -33,6 +33,7 @@ export default function VibeSyncApp() {
   const [chatMessages, setChatMessages] = useState<{ name: string; text: string; time: number }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [activeReactions, setActiveReactions] = useState<{ id: number; emoji: string; x: number }[]>([]);
   const [requests, setRequests] = useState<(Track & { requestedBy: string })[]>([]);
   const [guestSearchQuery, setGuestSearchQuery] = useState("");
@@ -48,7 +49,9 @@ export default function VibeSyncApp() {
   // Tracks if user has ever interacted — suppresses re-showing the unlock banner on queue advance
   const hasInteractedRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const reactionIdRef = useRef(0);
+  const isChatOpenRef = useRef(false);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -118,6 +121,7 @@ export default function VibeSyncApp() {
 
     socket.on("chat_message", (msg: { name: string; text: string; time: number }) => {
       setChatMessages(prev => [...prev, msg]);
+      if (!isChatOpenRef.current) setUnreadCount(c => c + 1);
     });
 
     socket.on("reaction", ({ emoji }: { emoji: string }) => {
@@ -211,10 +215,14 @@ export default function VibeSyncApp() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // Auto-scroll chat to latest message
+  // Scroll chat container (not whole page) to bottom on new messages
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    const el = chatContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [chatMessages]);
+
+  // Keep isChatOpenRef in sync so the socket listener can read it
+  useEffect(() => { isChatOpenRef.current = isChatOpen; }, [isChatOpen]);
 
   // Auto-fill join code from shareable URL (?join=XXXX)
   useEffect(() => {
@@ -293,6 +301,11 @@ export default function VibeSyncApp() {
     if (!text) return;
     socket.emit("send_message", { roomCode, text });
     setChatInput("");
+  };
+
+  const openChat = () => {
+    setIsChatOpen(o => !o);
+    setUnreadCount(0);
   };
 
   // --- REACTIONS ---
@@ -489,9 +502,14 @@ export default function VibeSyncApp() {
               </button>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button onClick={() => setIsChatOpen(o => !o)}
-                className={`text-xs font-bold uppercase px-3 py-1 border-2 transition-colors ${isChatOpen ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-neutral-400 hover:border-white hover:text-white'}`}>
+              <button onClick={openChat}
+                className={`relative text-xs font-bold uppercase px-3 py-1 border-2 transition-colors ${isChatOpen ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-neutral-400 hover:border-white hover:text-white'}`}>
                 💬 Chat
+                {unreadCount > 0 && !isChatOpen && (
+                  <span className="absolute -top-2 -right-2 bg-yellow-400 text-black text-xs font-black w-5 h-5 flex items-center justify-center rounded-full border border-black">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
               </button>
               <div className="px-3 py-1 bg-yellow-400 text-black font-bold uppercase text-sm border-2 border-black">
                 {isHost ? "Host" : "Listener"}
@@ -723,39 +741,61 @@ export default function VibeSyncApp() {
             </div>
           )}
 
-          {/* CHAT PANEL */}
-          {isChatOpen && (
-            <div className="bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#ffffff]">
-              <h3 className="text-xs font-bold uppercase text-neutral-400 tracking-widest p-4 pb-2 border-b border-neutral-800">💬 Chat</h3>
-              <div className="h-56 overflow-y-auto p-3 space-y-2">
-                {chatMessages.length === 0 && (
-                  <p className="text-neutral-600 text-xs text-center uppercase mt-4">No messages yet. Say something!</p>
-                )}
-                {chatMessages.map((msg, i) => (
-                  <div key={i} className="text-sm">
-                    <span className="font-bold text-yellow-400">{msg.name}: </span>
-                    <span className="text-white">{msg.text}</span>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
+        </div>
+      )}
+
+      {/* FLOATING CHAT PANEL — fixed overlay, works on mobile & desktop */}
+      {inRoom && isChatOpen && (
+        <div
+          className="fixed z-50 flex flex-col bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#facc15]"
+          style={{
+            bottom: '1rem',
+            right: '1rem',
+            width: 'min(380px, calc(100vw - 2rem))',
+            height: 'min(420px, 60vh)',
+            maxHeight: 'calc(100dvh - 2rem)',
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b-2 border-neutral-700 shrink-0">
+            <h3 className="text-xs font-bold uppercase text-yellow-400 tracking-widest">💬 Room Chat</h3>
+            <button onClick={() => setIsChatOpen(false)}
+              className="text-neutral-400 hover:text-white font-bold text-lg leading-none px-1">
+              ✕
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-3 space-y-2 overscroll-contain">
+            {chatMessages.length === 0 && (
+              <p className="text-neutral-600 text-xs text-center uppercase mt-6">No messages yet. Say something!</p>
+            )}
+            {chatMessages.map((msg, i) => (
+              <div key={i} className="text-sm break-words">
+                <span className="font-bold text-yellow-400">{msg.name}: </span>
+                <span className="text-white">{msg.text}</span>
               </div>
-              <div className="flex gap-2 p-3 border-t border-neutral-800">
-                <input
-                  type="text"
-                  placeholder="Type a message..."
-                  maxLength={200}
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                  className="flex-1 bg-black border-2 border-white p-2 text-sm focus:outline-none focus:border-yellow-400"
-                />
-                <button onClick={handleSendMessage}
-                  className="bg-yellow-400 text-black font-bold uppercase px-4 border-2 border-black hover:bg-yellow-300 shrink-0">
-                  Send
-                </button>
-              </div>
-            </div>
-          )}
+            ))}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input */}
+          <div className="flex gap-0 border-t-2 border-neutral-700 shrink-0">
+            <input
+              type="text"
+              placeholder="Type a message..."
+              maxLength={200}
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+              className="flex-1 bg-black p-3 text-sm focus:outline-none min-w-0"
+            />
+            <button
+              onClick={handleSendMessage}
+              className="bg-yellow-400 text-black font-bold uppercase px-4 border-l-2 border-neutral-700 hover:bg-yellow-300 shrink-0 text-sm">
+              Send
+            </button>
+          </div>
         </div>
       )}
     </div>
