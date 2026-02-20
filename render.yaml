@@ -3,6 +3,7 @@ services:
     name: vibesync-backend
     env: node
     buildCommand: npm install
+    healthCheckPath: /
     startCommand: node server.js
     envVars:
       - key: FRONTEND_URL
