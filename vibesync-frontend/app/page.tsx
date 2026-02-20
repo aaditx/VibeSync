@@ -472,6 +472,12 @@ export default function VibeSyncApp() {
                       className="bg-yellow-400 text-black border-2 border-black p-3 hover:bg-yellow-300 shadow-[2px_2px_0_0_#ffffff]">
                       {isPlaying ? <Pause size={20} /> : <Play size={20} />}
                     </button>
+                    {queue.length > 0 && (
+                      <button onClick={() => socket.emit("track_ended", { roomCode })}
+                        className="bg-neutral-700 text-white border-2 border-neutral-500 px-3 py-2 text-sm font-bold uppercase hover:bg-neutral-600">
+                        Next ⏭
+                      </button>
+                    )}
                     <span className="text-sm text-neutral-400">{formatTime(currentTime)} / {formatTime(duration)}</span>
                   </div>
                   <input type="range" min={0} max={duration || 100} value={currentTime}
