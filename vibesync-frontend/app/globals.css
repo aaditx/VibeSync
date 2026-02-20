@@ -24,3 +24,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@keyframes float-up {
+  0%   { transform: translateY(0) scale(1);    opacity: 1; }
+  80%  { opacity: 0.8; }
+  100% { transform: translateY(-200px) scale(1.5); opacity: 0; }
+}
+.reaction-float {
+  animation: float-up 2.5s ease-out forwards;
+}

@@ -30,6 +30,15 @@ export default function VibeSyncApp() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
 
+  const [chatMessages, setChatMessages] = useState<{ name: string; text: string; time: number }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [activeReactions, setActiveReactions] = useState<{ id: number; emoji: string; x: number }[]>([]);
+  const [requests, setRequests] = useState<(Track & { requestedBy: string })[]>([]);
+  const [guestSearchQuery, setGuestSearchQuery] = useState("");
+  const [guestSearchResults, setGuestSearchResults] = useState<SearchResult[]>([]);
+  const [isGuestSearching, setIsGuestSearching] = useState(false);
+
   const playerRef = useRef<any>(null);
   const isSyncingRef = useRef(false);
   const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -38,6 +47,8 @@ export default function VibeSyncApp() {
   const wasPlayingOnHideRef = useRef(false);
   // Tracks if user has ever interacted — suppresses re-showing the unlock banner on queue advance
   const hasInteractedRef = useRef(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const reactionIdRef = useRef(0);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -105,6 +116,21 @@ export default function VibeSyncApp() {
       setQueue(q);
     });
 
+    socket.on("chat_message", (msg: { name: string; text: string; time: number }) => {
+      setChatMessages(prev => [...prev, msg]);
+    });
+
+    socket.on("reaction", ({ emoji }: { emoji: string }) => {
+      const id = ++reactionIdRef.current;
+      const x = 5 + Math.random() * 80;
+      setActiveReactions(prev => [...prev, { id, emoji, x }]);
+      setTimeout(() => setActiveReactions(prev => prev.filter(r => r.id !== id)), 2500);
+    });
+
+    socket.on("requests_update", (reqs: (Track & { requestedBy: string })[]) => {
+      setRequests(reqs);
+    });
+
     return () => {
       socket.off("user_joined");
       socket.off("load_track");
@@ -114,6 +140,9 @@ export default function VibeSyncApp() {
       socket.off("host_transferred");
       socket.off("room_users");
       socket.off("queue_update");
+      socket.off("chat_message");
+      socket.off("reaction");
+      socket.off("requests_update");
     };
   }, [isHost, roomCode, track, isPlaying]);
 
@@ -182,6 +211,18 @@ export default function VibeSyncApp() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  // Auto-fill join code from shareable URL (?join=XXXX)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const joinParam = params.get('join');
+    if (joinParam) setJoinCode(joinParam.slice(0, 4).toUpperCase());
+  }, []);
+
   // --- LOBBY ---
   const handleCreateRoom = () => {
     if (!socket.connected) { alert("Not connected to server. Please wait and try again."); return; }
@@ -202,6 +243,8 @@ export default function VibeSyncApp() {
         setInRoom(true);
         if (res.currentTrack) { setTrack(res.currentTrack); setNeedsInteraction(true); }
         if (res.queue) setQueue(res.queue);
+        if (res.messages) setChatMessages(res.messages);
+        if (res.requests) setRequests(res.requests);
       } else alert(res.message);
     });
   };
@@ -242,6 +285,51 @@ export default function VibeSyncApp() {
 
   const handleRemoveFromQueue = (index: number) => {
     socket.emit("remove_from_queue", { roomCode, index });
+  };
+
+  // --- CHAT ---
+  const handleSendMessage = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    socket.emit("send_message", { roomCode, text });
+    setChatInput("");
+  };
+
+  // --- REACTIONS ---
+  const handleSendReaction = (emoji: string) => {
+    socket.emit("send_reaction", { roomCode, emoji });
+  };
+
+  // --- GUEST SEARCH & REQUESTS ---
+  const handleGuestSearch = async () => {
+    if (!guestSearchQuery.trim()) return;
+    setIsGuestSearching(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/search?q=${encodeURIComponent(guestSearchQuery)}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setGuestSearchResults(data);
+    } catch (e: any) {
+      alert("Search failed: " + e.message);
+    } finally {
+      setIsGuestSearching(false);
+    }
+  };
+
+  const handleRequestTrack = (result: SearchResult) => {
+    const trackData: Track = { videoId: result.videoId, title: result.title, thumbnail: result.thumbnail, channel: result.channel };
+    socket.emit("request_track", { roomCode, trackData });
+    setGuestSearchResults([]);
+    setGuestSearchQuery("");
+    alert("Request sent to host!");
+  };
+
+  const handleApproveRequest = (index: number, addToQueue: boolean) => {
+    socket.emit("approve_request", { roomCode, index, addToQueue });
+  };
+
+  const handleRejectRequest = (index: number) => {
+    socket.emit("reject_request", { roomCode, index });
   };
 
   // --- HOST CONTROLS ---
@@ -342,6 +430,13 @@ export default function VibeSyncApp() {
         </div>
       )}
 
+      {/* FLOATING REACTIONS OVERLAY */}
+      {activeReactions.map(r => (
+        <div key={r.id} className="reaction-float" style={{ position: "fixed", bottom: "15%", left: `${r.x}%`, zIndex: 9999, fontSize: "2.5rem", pointerEvents: "none", userSelect: "none" }}>
+          {r.emoji}
+        </div>
+      ))}
+
       {/* HEADER */}
       <h1 className="text-5xl font-black tracking-tighter uppercase mb-10 border-4 border-white p-4 shadow-[8px_8px_0_0_#ffffff] bg-black">
         Vibe<span className="text-yellow-400">Sync</span>
@@ -381,12 +476,26 @@ export default function VibeSyncApp() {
 
           {/* ROOM INFO BAR */}
           <div className="flex items-center justify-between bg-black border-4 border-white p-4 shadow-[4px_4px_0_0_#ffffff]">
-            <div className="flex items-center gap-3">
-              <Users className="text-yellow-400" />
+            <div className="flex items-center gap-2 flex-wrap">
+              <Users className="text-yellow-400 shrink-0" />
               <span className="text-xl font-bold uppercase">Room: {roomCode}</span>
+              <button onClick={() => navigator.clipboard.writeText(roomCode)}
+                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-2 py-1 hover:border-yellow-400">
+                Copy Code
+              </button>
+              <button onClick={() => navigator.clipboard.writeText(`${window.location.origin}${window.location.pathname}?join=${roomCode}`)}
+                className="text-neutral-400 hover:text-yellow-400 text-xs font-bold uppercase border border-neutral-700 px-2 py-1 hover:border-yellow-400">
+                Share Link
+              </button>
             </div>
-            <div className="px-3 py-1 bg-yellow-400 text-black font-bold uppercase text-sm border-2 border-black">
-              {isHost ? "Host" : "Listener"}
+            <div className="flex items-center gap-2 shrink-0">
+              <button onClick={() => setIsChatOpen(o => !o)}
+                className={`text-xs font-bold uppercase px-3 py-1 border-2 transition-colors ${isChatOpen ? 'border-yellow-400 text-yellow-400' : 'border-neutral-600 text-neutral-400 hover:border-white hover:text-white'}`}>
+                💬 Chat
+              </button>
+              <div className="px-3 py-1 bg-yellow-400 text-black font-bold uppercase text-sm border-2 border-black">
+                {isHost ? "Host" : "Listener"}
+              </div>
             </div>
           </div>
 
@@ -407,6 +516,19 @@ export default function VibeSyncApp() {
               </div>
             </div>
           )}
+
+          {/* REACTIONS BAR */}
+          <div className="bg-neutral-900 border-4 border-white p-3 shadow-[4px_4px_0_0_#ffffff]">
+            <p className="text-xs font-bold uppercase text-neutral-400 mb-2 tracking-widest">React</p>
+            <div className="flex gap-2">
+              {["🔥", "❤️", "😂", "🎵", "👏", "💀"].map(emoji => (
+                <button key={emoji} onClick={() => handleSendReaction(emoji)}
+                  className="text-2xl hover:scale-125 transition-transform active:scale-95">
+                  {emoji}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {/* HOST SEARCH */}
           {isHost && (
@@ -446,6 +568,75 @@ export default function VibeSyncApp() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* GUEST SEARCH & REQUESTS */}
+          {!isHost && (
+            <div className="bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#ffffff]">
+              <div className="flex gap-2 p-4">
+                <Search className="mt-2 shrink-0 text-neutral-400" />
+                <input type="text" placeholder="Request a song..."
+                  value={guestSearchQuery}
+                  onChange={(e) => setGuestSearchQuery(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleGuestSearch()}
+                  className="w-full bg-black border-2 border-white p-2 text-sm focus:outline-none focus:border-yellow-400" />
+                <button onClick={handleGuestSearch} disabled={isGuestSearching}
+                  className="bg-neutral-700 text-white font-bold uppercase px-4 border-2 border-neutral-500 hover:bg-neutral-600 disabled:opacity-50 shrink-0">
+                  {isGuestSearching ? "..." : "Search"}
+                </button>
+              </div>
+              {guestSearchResults.length > 0 && (
+                <div className="border-t-2 border-white max-h-60 overflow-y-auto">
+                  {guestSearchResults.map((r) => (
+                    <div key={r.videoId} className="flex items-center gap-3 p-3 border-b border-neutral-800 hover:bg-neutral-800">
+                      <img src={r.thumbnail} alt="" className="w-14 h-10 object-cover border border-neutral-700 shrink-0" />
+                      <div className="overflow-hidden flex-1">
+                        <p className="font-bold text-sm truncate">{r.title}</p>
+                        <p className="text-yellow-400 text-xs">{r.channel}</p>
+                      </div>
+                      <button onClick={() => handleRequestTrack(r)}
+                        className="bg-neutral-700 text-white font-bold text-xs uppercase px-2 py-1 border border-neutral-500 hover:bg-neutral-600 shrink-0">
+                        📩 Request
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* HOST: PENDING TRACK REQUESTS */}
+          {isHost && requests.length > 0 && (
+            <div className="bg-neutral-900 border-4 border-yellow-400 shadow-[4px_4px_0_0_#facc15]">
+              <h3 className="text-xs font-bold uppercase text-yellow-400 tracking-widest p-4 pb-2">
+                📩 Track Requests — {requests.length}
+              </h3>
+              <div className="divide-y divide-neutral-800">
+                {requests.map((req, i) => (
+                  <div key={i} className="flex items-center gap-3 p-3">
+                    <img src={req.thumbnail} alt="" className="w-12 h-9 object-cover border border-neutral-700 shrink-0" />
+                    <div className="overflow-hidden flex-1">
+                      <p className="font-bold text-sm truncate">{req.title}</p>
+                      <p className="text-neutral-400 text-xs">by {req.requestedBy}</p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <button onClick={() => handleApproveRequest(i, false)}
+                        className="bg-yellow-400 text-black font-bold text-xs uppercase px-2 py-1 border border-black hover:bg-yellow-300">
+                        ▶ Play
+                      </button>
+                      <button onClick={() => handleApproveRequest(i, true)}
+                        className="bg-neutral-700 text-white font-bold text-xs uppercase px-2 py-1 border border-neutral-500 hover:bg-neutral-600">
+                        + Queue
+                      </button>
+                      <button onClick={() => handleRejectRequest(i)}
+                        className="text-neutral-500 hover:text-white font-bold text-lg px-2">
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -528,6 +719,40 @@ export default function VibeSyncApp() {
                     )}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* CHAT PANEL */}
+          {isChatOpen && (
+            <div className="bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#ffffff]">
+              <h3 className="text-xs font-bold uppercase text-neutral-400 tracking-widest p-4 pb-2 border-b border-neutral-800">💬 Chat</h3>
+              <div className="h-56 overflow-y-auto p-3 space-y-2">
+                {chatMessages.length === 0 && (
+                  <p className="text-neutral-600 text-xs text-center uppercase mt-4">No messages yet. Say something!</p>
+                )}
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className="text-sm">
+                    <span className="font-bold text-yellow-400">{msg.name}: </span>
+                    <span className="text-white">{msg.text}</span>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="flex gap-2 p-3 border-t border-neutral-800">
+                <input
+                  type="text"
+                  placeholder="Type a message..."
+                  maxLength={200}
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                  className="flex-1 bg-black border-2 border-white p-2 text-sm focus:outline-none focus:border-yellow-400"
+                />
+                <button onClick={handleSendMessage}
+                  className="bg-yellow-400 text-black font-bold uppercase px-4 border-2 border-black hover:bg-yellow-300 shrink-0">
+                  Send
+                </button>
               </div>
             </div>
           )}

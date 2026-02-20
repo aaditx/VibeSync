@@ -85,7 +85,7 @@ io.on('connection', (socket) => {
     const displayName = (name || 'Host').trim().slice(0, 20);
     let roomCode;
     do { roomCode = generateRoomCode(); } while (rooms[roomCode]);
-    rooms[roomCode] = { host: socket.id, users: new Map(), currentTrack: null, queue: [] };
+    rooms[roomCode] = { host: socket.id, users: new Map(), currentTrack: null, queue: [], messages: [], requests: [] };
     rooms[roomCode].users.set(socket.id, displayName);
     socket.join(roomCode);
     console.log(`Room ${roomCode} created by ${displayName} (${socket.id})`);
@@ -101,7 +101,7 @@ io.on('connection', (socket) => {
       rooms[roomCode].users.set(socket.id, displayName);
       socket.join(roomCode);
       console.log(`${displayName} (${socket.id}) joined room ${roomCode}`);
-      callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack, queue: rooms[roomCode].queue });
+      callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack, queue: rooms[roomCode].queue, messages: rooms[roomCode].messages, requests: rooms[roomCode].requests });
       io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
       socket.to(roomCode).emit('user_joined'); // Bug fix: removed unused userId payload
     } else {
@@ -165,6 +165,55 @@ io.on('connection', (socket) => {
     } else {
       room.currentTrack = null;
     }
+  });
+
+  socket.on('send_message', ({ roomCode, text } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || !text || !room.users.has(socket.id)) return;
+    const name = room.users.get(socket.id);
+    const msg = { name, text: text.toString().slice(0, 200), time: Date.now() };
+    room.messages.push(msg);
+    if (room.messages.length > 100) room.messages.shift();
+    io.to(roomCode).emit('chat_message', msg);
+  });
+
+  socket.on('send_reaction', ({ roomCode, emoji } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || !emoji || !room.users.has(socket.id)) return;
+    io.to(roomCode).emit('reaction', { emoji });
+  });
+
+  socket.on('request_track', ({ roomCode, trackData } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || !trackData || !room.users.has(socket.id) || room.host === socket.id) return;
+    const name = room.users.get(socket.id);
+    room.requests.push({ ...trackData, requestedBy: name });
+    io.to(roomCode).emit('requests_update', room.requests);
+  });
+
+  socket.on('approve_request', ({ roomCode, index, addToQueue } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || room.host !== socket.id || typeof index !== 'number') return;
+    const [req] = room.requests.splice(index, 1);
+    if (!req) return;
+    const { requestedBy, ...trackData } = req;
+    if (addToQueue) {
+      room.queue.push(trackData);
+      io.to(roomCode).emit('queue_update', room.queue);
+    } else {
+      room.currentTrack = trackData;
+      room.queue = [];
+      io.to(roomCode).emit('load_track', trackData);
+      io.to(roomCode).emit('queue_update', room.queue);
+    }
+    io.to(roomCode).emit('requests_update', room.requests);
+  });
+
+  socket.on('reject_request', ({ roomCode, index } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || room.host !== socket.id || typeof index !== 'number') return;
+    room.requests.splice(index, 1);
+    io.to(roomCode).emit('requests_update', room.requests);
   });
 
   socket.on('disconnect', () => {
