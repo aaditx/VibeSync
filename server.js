@@ -55,7 +55,7 @@ app.get('/api/search', (req, res) => {
 });
 
 // -------------------------------------------------------------------
-// SOCKET.IO — ROOM MANAGEMENT & SYNC
+// SOCKET.IO ï¿½ ROOM MANAGEMENT & SYNC
 // -------------------------------------------------------------------
 const rooms = {};
 
@@ -136,4 +136,16 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => console.log(`VibeSync Backend running on http://localhost:${PORT}`));
+server.listen(PORT, () => {
+  console.log(`VibeSync Backend running on http://localhost:${PORT}`);
+
+  // Keep Render free tier alive by self-pinging every 14 minutes.
+  // Render spins down after 15 min of inactivity â€” this prevents that.
+  const SELF_URL = process.env.RENDER_EXTERNAL_URL;
+  if (SELF_URL) {
+    setInterval(() => {
+      https.get(`${SELF_URL}/`).on('error', () => {});
+      console.log('[keep-alive] pinged self');
+    }, 14 * 60 * 1000);
+  }
+});
