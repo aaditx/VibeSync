@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="90" viewBox="0 0 320 90">
+  <!-- Offset shadow -->
+  <rect x="8" y="8" width="304" height="74" fill="#ffffff"/>
+  <!-- Main background -->
+  <rect x="0" y="0" width="304" height="74" fill="#000000" stroke="#ffffff" stroke-width="4"/>
+  <!-- VIBE text -->
+  <text x="20" y="54" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="46" fill="#ffffff" letter-spacing="-2">VIBE</text>
+  <!-- SYNC text -->
+  <text x="152" y="54" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="46" fill="#facc15" letter-spacing="-2">SYNC</text>
+</svg>

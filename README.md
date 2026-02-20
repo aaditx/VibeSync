@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="VibeSync" width="320"/>
+</p>
+
 # VibeSync
 
 A real-time synchronized music listening app. One person hosts, everyone else listens — all perfectly in sync. Built with YouTube IFrame Player API, Socket.io, Next.js, and Node.js.
