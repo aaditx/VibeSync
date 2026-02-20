@@ -82,38 +82,37 @@ app.post('/api/extract-audio', async (req, res) => {
   }
 
   try {
-    const options = {
-      dumpJson: true,
-      format: 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+    const commonOpts = {
       noCheckCertificates: true,
       noWarnings: true,
-      preferFreeFormats: true,
       addHeader: ['referer:https://www.youtube.com', 'user-agent:Mozilla/5.0'],
     };
+    if (cookiesFilePath) commonOpts.cookies = cookiesFilePath;
 
-    if (cookiesFilePath) {
-      options.cookies = cookiesFilePath;
-    }
+    // Pass 1: get video metadata (title, thumbnail)
+    const info = await youtubedl(url, { ...commonOpts, dumpJson: true });
 
-    const output = await youtubedl(url, options);
+    // Pass 2: get the actual stream URL using --get-url (most reliable)
+    const FORMAT = 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best';
+    const rawUrl = await youtubedl(url, {
+      ...commonOpts,
+      getUrl: true,
+      format: FORMAT,
+    });
 
-    // yt-dlp can put the stream URL in several places depending on the format
-    const streamUrl =
-      output.url ||
-      (output.requested_downloads && output.requested_downloads[0] && output.requested_downloads[0].url) ||
-      (output.requested_formats && output.requested_formats[0] && output.requested_formats[0].url) ||
-      (Array.isArray(output.formats) && output.formats.find(f => f.acodec !== 'none' && f.url)?.url);
+    // getUrl returns a string or array of strings
+    const streamUrl = Array.isArray(rawUrl) ? rawUrl[0] : rawUrl;
 
-    if (!streamUrl) {
-      console.error('No stream URL found. Output keys:', Object.keys(output));
+    if (!streamUrl || typeof streamUrl !== 'string' || !streamUrl.startsWith('http')) {
+      console.error('getUrl returned unexpected value:', rawUrl);
       return res.status(500).json({ error: 'Could not extract stream URL.' });
     }
 
     const encodedUrl = Buffer.from(streamUrl).toString('base64');
     res.json({
-      title: output.title,
+      title: info.title,
       audioUrl: `/api/proxy-audio?url=${encodedUrl}`,
-      thumbnail: output.thumbnail,
+      thumbnail: info.thumbnail,
     });
   } catch (error) {
     console.error('Extraction Error:', error.message);
