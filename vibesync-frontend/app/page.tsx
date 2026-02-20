@@ -30,6 +30,7 @@ export default function VibeSyncApp() {
   const playerRef = useRef<any>(null);
   const isSyncingRef = useRef(false);
   const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPlayingRef = useRef(false);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -93,6 +94,9 @@ export default function VibeSyncApp() {
     };
   }, [isHost, roomCode, track, isPlaying]);
 
+  // Keep isPlayingRef in sync for use inside event listeners
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
   // Poll current time for seek slider
   useEffect(() => {
     if (timeIntervalRef.current) clearInterval(timeIntervalRef.current);
@@ -103,6 +107,55 @@ export default function VibeSyncApp() {
     }
     return () => { if (timeIntervalRef.current) clearInterval(timeIntervalRef.current); };
   }, [isPlaying]);
+
+  // --- MEDIA SESSION (OS media controls + background play hint) ---
+  useEffect(() => {
+    if (!track || !('mediaSession' in navigator)) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title,
+      artist: track.channel || 'VibeSync',
+      artwork: [{ src: track.thumbnail, sizes: '480x360', type: 'image/jpeg' }],
+    });
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (isHost) handlePlay();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      if (isHost) handlePause();
+    });
+    return () => {
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [track, isHost]);
+
+  // Update MediaSession playback state
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+  }, [isPlaying]);
+
+  // --- VISIBILITY CHANGE: resume playback if tab returns while we should be playing ---
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isPlayingRef.current && playerRef.current) {
+        // Small delay to let browser re-activate the iframe context
+        setTimeout(() => {
+          try {
+            const state = playerRef.current?.getPlayerState?.();
+            // YT.PlayerState.PAUSED = 2
+            if (state === 2 || state === -1) {
+              playerRef.current.playVideo();
+            }
+          } catch {
+            // player may not be ready; ignore
+          }
+        }, 300);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, []);
 
   // --- LOBBY ---
   const handleCreateRoom = () => {
@@ -205,12 +258,12 @@ export default function VibeSyncApp() {
   return (
     <div className="min-h-screen bg-neutral-950 text-white font-mono p-6 flex flex-col items-center justify-center selection:bg-yellow-400 selection:text-black">
 
-      {/* HIDDEN YOUTUBE PLAYER — audio plays, no visible video */}
+      {/* HIDDEN YOUTUBE PLAYER — full 320x180 at opacity:0 so browser treats it as active media */}
       {track && (
-        <div style={{ position: "absolute", top: -9999, left: -9999, width: 1, height: 1, overflow: "hidden" }}>
+        <div style={{ position: "fixed", bottom: 0, right: 0, width: 320, height: 180, opacity: 0, pointerEvents: "none", zIndex: -1 }}>
           <YouTube
             videoId={track.videoId}
-            opts={{ width: "1", height: "1", playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3 } }}
+            opts={{ width: "320", height: "180", playerVars: { autoplay: 0, controls: 0, rel: 0, modestbranding: 1, iv_load_policy: 3, playsinline: 1 } }}
             onReady={onPlayerReady}
             onStateChange={onStateChange}
           />
