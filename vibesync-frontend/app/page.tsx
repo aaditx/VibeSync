@@ -31,6 +31,8 @@ export default function VibeSyncApp() {
   const isSyncingRef = useRef(false);
   const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isPlayingRef = useRef(false);
+  // Stores a play command that arrived before the player was ready
+  const pendingPlayRef = useRef<number | null>(null);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -58,6 +60,9 @@ export default function VibeSyncApp() {
         playerRef.current.playVideo();
         setIsPlaying(true);
         setTimeout(() => { isSyncingRef.current = false; }, 500);
+      } else {
+        // Player not ready yet — store and apply once onPlayerReady fires
+        pendingPlayRef.current = time;
       }
     });
 
@@ -159,6 +164,7 @@ export default function VibeSyncApp() {
 
   // --- LOBBY ---
   const handleCreateRoom = () => {
+    if (!socket.connected) { alert("Not connected to server. Please wait and try again."); return; }
     socket.emit("create_room", (res: any) => {
       if (res.success) { setRoomCode(res.roomCode); setIsHost(res.isHost); setInRoom(true); }
     });
@@ -166,6 +172,7 @@ export default function VibeSyncApp() {
 
   const handleJoinRoom = () => {
     if (!joinCode) return;
+    if (!socket.connected) { alert("Not connected to server. Retrying connection..."); socket.connect(); return; }
     socket.emit("join_room", joinCode, (res: any) => {
       if (res.success) {
         setRoomCode(res.roomCode);
@@ -230,6 +237,16 @@ export default function VibeSyncApp() {
   const onPlayerReady = (e: any) => {
     playerRef.current = e.target;
     setDuration(e.target.getDuration() || 0);
+    // Apply any play command that arrived before the player was ready
+    if (pendingPlayRef.current !== null) {
+      const time = pendingPlayRef.current;
+      pendingPlayRef.current = null;
+      isSyncingRef.current = true;
+      e.target.seekTo(time, true);
+      e.target.playVideo();
+      setIsPlaying(true);
+      setTimeout(() => { isSyncingRef.current = false; }, 500);
+    }
   };
 
   const onStateChange = (e: any) => {
@@ -248,6 +265,10 @@ export default function VibeSyncApp() {
   const handleGuestUnlock = () => {
     if (playerRef.current) {
       playerRef.current.playVideo();
+      setNeedsInteraction(false);
+    } else {
+      // Player still loading — mark pending so onPlayerReady will auto-play
+      pendingPlayRef.current = 0;
       setNeedsInteraction(false);
     }
   };
