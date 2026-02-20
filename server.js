@@ -2,10 +2,49 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const youtubedl = require('youtube-dl-exec');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execSync } = require('child_process');
+const https = require('https');
+
+// -------------------------------------------------------------------
+// AUTO-UPDATE yt-dlp BINARY TO LATEST VERSION ON STARTUP
+// -------------------------------------------------------------------
+const ytDlpPath = path.join(os.tmpdir(), 'yt-dlp');
+
+function downloadLatestYtDlp() {
+  return new Promise((resolve) => {
+    console.log('Downloading latest yt-dlp binary...');
+    const file = fs.createWriteStream(ytDlpPath);
+    const url = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+    https.get(url, (res) => {
+      // Follow redirects
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        https.get(res.headers.location, (res2) => {
+          res2.pipe(file);
+          file.on('finish', () => {
+            file.close();
+            try { fs.chmodSync(ytDlpPath, '755'); } catch(e) {}
+            console.log('yt-dlp updated successfully.');
+            resolve(ytDlpPath);
+          });
+        }).on('error', () => resolve(null));
+      } else {
+        res.pipe(file);
+        file.on('finish', () => {
+          file.close();
+          try { fs.chmodSync(ytDlpPath, '755'); } catch(e) {}
+          console.log('yt-dlp updated successfully.');
+          resolve(ytDlpPath);
+        });
+      }
+    }).on('error', (err) => {
+      console.error('Failed to download yt-dlp:', err.message);
+      resolve(null);
+    });
+  });
+}
 
 // Write YouTube cookies from env variable to a temp file (for server deployments)
 let cookiesFilePath = null;
@@ -14,6 +53,9 @@ if (process.env.YOUTUBE_COOKIES) {
   fs.writeFileSync(cookiesFilePath, process.env.YOUTUBE_COOKIES);
   console.log('YouTube cookies loaded from environment.');
 }
+
+// Will hold the youtubedl instance pointing to the latest binary
+let youtubedl = require('youtube-dl-exec');
 
 const app = express();
 app.use(cors());
@@ -42,7 +84,7 @@ app.post('/api/extract-audio', async (req, res) => {
   try {
     const options = {
       dumpJson: true,
-      format: 'ba/b',
+      format: 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
       noCheckCertificates: true,
       noWarnings: true,
       preferFreeFormats: true,
@@ -165,6 +207,17 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`VibeSync Backend running on http://localhost:${PORT}`);
+
+// Download latest yt-dlp first, then start the server
+downloadLatestYtDlp().then((binaryPath) => {
+  if (binaryPath) {
+    youtubedl = require('youtube-dl-exec').create(binaryPath);
+    console.log('Using freshly downloaded yt-dlp binary.');
+  } else {
+    console.log('Falling back to bundled yt-dlp binary.');
+  }
+
+  server.listen(PORT, () => {
+    console.log(`VibeSync Backend running on http://localhost:${PORT}`);
+  });
 });
