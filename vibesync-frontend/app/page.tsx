@@ -20,6 +20,7 @@ export default function VibeSyncApp() {
   const [roomUsers, setRoomUsers] = useState<{ name: string; isHost: boolean }[]>([]);
 
   const [track, setTrack] = useState<Track | null>(null);
+  const [queue, setQueue] = useState<Track[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -33,10 +34,10 @@ export default function VibeSyncApp() {
   const isSyncingRef = useRef(false);
   const timeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isPlayingRef = useRef(false);
-  // Stores a play command that arrived before the player was ready
   const pendingPlayRef = useRef<number | null>(null);
-  // Tracks whether we were playing before the tab was hidden (YouTube auto-pauses on hide)
   const wasPlayingOnHideRef = useRef(false);
+  // Tracks if user has ever interacted — suppresses re-showing the unlock banner on queue advance
+  const hasInteractedRef = useRef(false);
 
   // --- SOCKET LISTENERS ---
   useEffect(() => {
@@ -53,7 +54,10 @@ export default function VibeSyncApp() {
 
     socket.on("load_track", (trackData: Track) => {
       setTrack(trackData);
-      setNeedsInteraction(true);
+      setCurrentTime(0);
+      setDuration(0);
+      // Only show unlock banner if user hasn't interacted yet
+      if (!hasInteractedRef.current) setNeedsInteraction(true);
       setIsPlaying(false);
     });
 
@@ -97,6 +101,10 @@ export default function VibeSyncApp() {
       setRoomUsers(users);
     });
 
+    socket.on("queue_update", (q: Track[]) => {
+      setQueue(q);
+    });
+
     return () => {
       socket.off("user_joined");
       socket.off("load_track");
@@ -105,6 +113,7 @@ export default function VibeSyncApp() {
       socket.off("seek");
       socket.off("host_transferred");
       socket.off("room_users");
+      socket.off("queue_update");
     };
   }, [isHost, roomCode, track, isPlaying]);
 
@@ -192,6 +201,7 @@ export default function VibeSyncApp() {
         setIsHost(res.isHost);
         setInRoom(true);
         if (res.currentTrack) { setTrack(res.currentTrack); setNeedsInteraction(true); }
+        if (res.queue) setQueue(res.queue);
       } else alert(res.message);
     });
   };
@@ -215,11 +225,23 @@ export default function VibeSyncApp() {
   const handleSelectTrack = (result: SearchResult) => {
     const trackData: Track = { videoId: result.videoId, title: result.title, thumbnail: result.thumbnail, channel: result.channel };
     setTrack(trackData);
+    setQueue([]);
     setSearchResults([]);
     setSearchQuery("");
     setIsPlaying(false);
     setNeedsInteraction(false);
     socket.emit("load_track", { roomCode, trackData });
+  };
+
+  const handleAddToQueue = (result: SearchResult) => {
+    const trackData: Track = { videoId: result.videoId, title: result.title, thumbnail: result.thumbnail, channel: result.channel };
+    socket.emit("add_to_queue", { roomCode, trackData });
+    setSearchResults([]);
+    setSearchQuery("");
+  };
+
+  const handleRemoveFromQueue = (index: number) => {
+    socket.emit("remove_from_queue", { roomCode, index });
   };
 
   // --- HOST CONTROLS ---
@@ -273,25 +295,27 @@ export default function VibeSyncApp() {
 
   const onStateChange = (e: any) => {
     if (isSyncingRef.current) return;
-    const YT_PLAYING = 1, YT_PAUSED = 2;
+    const YT_PLAYING = 1, YT_PAUSED = 2, YT_ENDED = 0;
     if (e.data === YT_PLAYING) {
       setIsPlaying(true);
       setDuration(e.target.getDuration() || 0);
       if (isHost) socket.emit("play", { roomCode, time: e.target.getCurrentTime() });
     } else if (e.data === YT_PAUSED) {
-      // YouTube auto-pauses when tab goes hidden — don't treat this as a real pause
       if (document.hidden) return;
       setIsPlaying(false);
       if (isHost) socket.emit("pause", { roomCode, time: e.target.getCurrentTime() });
+    } else if (e.data === YT_ENDED) {
+      // Host signals end so server can advance the queue for everyone
+      if (isHost) socket.emit("track_ended", { roomCode });
     }
   };
 
   const handleGuestUnlock = () => {
+    hasInteractedRef.current = true;
     if (playerRef.current) {
       playerRef.current.playVideo();
       setNeedsInteraction(false);
     } else {
-      // Player still loading — mark pending so onPlayerReady will auto-play
       pendingPlayRef.current = 0;
       setNeedsInteraction(false);
     }
@@ -402,14 +426,23 @@ export default function VibeSyncApp() {
               {searchResults.length > 0 && (
                 <div className="border-t-2 border-white max-h-72 overflow-y-auto">
                   {searchResults.map((r) => (
-                    <button key={r.videoId} onClick={() => handleSelectTrack(r)}
-                      className="w-full flex items-center gap-3 p-3 hover:bg-neutral-800 border-b border-neutral-800 text-left">
+                    <div key={r.videoId} className="flex items-center gap-3 p-3 border-b border-neutral-800 hover:bg-neutral-800">
                       <img src={r.thumbnail} alt="" className="w-16 h-12 object-cover border-2 border-neutral-700 shrink-0" />
-                      <div className="overflow-hidden">
+                      <div className="overflow-hidden flex-1">
                         <p className="font-bold text-sm truncate">{r.title}</p>
                         <p className="text-yellow-400 text-xs">{r.channel}</p>
                       </div>
-                    </button>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button onClick={() => handleSelectTrack(r)}
+                          className="bg-yellow-400 text-black font-bold text-xs uppercase px-2 py-1 border border-black hover:bg-yellow-300">
+                          ▶ Play
+                        </button>
+                        <button onClick={() => handleAddToQueue(r)}
+                          className="bg-neutral-700 text-white font-bold text-xs uppercase px-2 py-1 border border-neutral-500 hover:bg-neutral-600">
+                          + Queue
+                        </button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
@@ -465,6 +498,31 @@ export default function VibeSyncApp() {
             <div className="bg-black border-4 border-neutral-800 p-12 text-center text-neutral-500 uppercase font-bold text-xl border-dashed">
               <Music className="mx-auto mb-4 opacity-30" size={48} />
               {isHost ? "Search for a song above to get started" : "Waiting for host to load a track..."}
+            </div>
+          )}
+
+          {/* QUEUE */}
+          {queue.length > 0 && (
+            <div className="bg-neutral-900 border-4 border-white shadow-[4px_4px_0_0_#ffffff]">
+              <h3 className="text-xs font-bold uppercase text-neutral-400 tracking-widest p-4 pb-2">Up Next — {queue.length}</h3>
+              <div className="divide-y divide-neutral-800">
+                {queue.map((q, i) => (
+                  <div key={i} className="flex items-center gap-3 p-3">
+                    <span className="text-neutral-500 font-bold text-sm w-5 shrink-0">{i + 1}</span>
+                    <img src={q.thumbnail} alt="" className="w-12 h-9 object-cover border border-neutral-700 shrink-0" />
+                    <div className="overflow-hidden flex-1">
+                      <p className="font-bold text-sm truncate">{q.title}</p>
+                      {q.channel && <p className="text-yellow-400 text-xs">{q.channel}</p>}
+                    </div>
+                    {isHost && (
+                      <button onClick={() => handleRemoveFromQueue(i)}
+                        className="text-neutral-500 hover:text-white font-bold text-lg shrink-0 px-2">
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

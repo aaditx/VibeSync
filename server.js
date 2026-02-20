@@ -85,7 +85,7 @@ io.on('connection', (socket) => {
     const displayName = (name || 'Host').trim().slice(0, 20);
     let roomCode;
     do { roomCode = generateRoomCode(); } while (rooms[roomCode]);
-    rooms[roomCode] = { host: socket.id, users: new Map(), currentTrack: null };
+    rooms[roomCode] = { host: socket.id, users: new Map(), currentTrack: null, queue: [] };
     rooms[roomCode].users.set(socket.id, displayName);
     socket.join(roomCode);
     console.log(`Room ${roomCode} created by ${displayName} (${socket.id})`);
@@ -101,7 +101,7 @@ io.on('connection', (socket) => {
       rooms[roomCode].users.set(socket.id, displayName);
       socket.join(roomCode);
       console.log(`${displayName} (${socket.id}) joined room ${roomCode}`);
-      callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack });
+      callback({ success: true, roomCode, isHost: false, currentTrack: rooms[roomCode].currentTrack, queue: rooms[roomCode].queue });
       io.to(roomCode).emit('room_users', getRoomUsers(roomCode));
       socket.to(roomCode).emit('user_joined'); // Bug fix: removed unused userId payload
     } else {
@@ -132,6 +132,38 @@ io.on('connection', (socket) => {
   socket.on('seek', ({ roomCode, time } = {}) => {
     if (rooms[roomCode] && rooms[roomCode].host === socket.id) {
       socket.to(roomCode).emit('seek', { time });
+    }
+  });
+
+  socket.on('add_to_queue', ({ roomCode, trackData } = {}) => {
+    if (rooms[roomCode] && rooms[roomCode].host === socket.id && trackData) {
+      rooms[roomCode].queue.push(trackData);
+      io.to(roomCode).emit('queue_update', rooms[roomCode].queue);
+    }
+  });
+
+  socket.on('remove_from_queue', ({ roomCode, index } = {}) => {
+    const room = rooms[roomCode];
+    if (room && room.host === socket.id && typeof index === 'number') {
+      room.queue.splice(index, 1);
+      io.to(roomCode).emit('queue_update', room.queue);
+    }
+  });
+
+  socket.on('track_ended', ({ roomCode } = {}) => {
+    const room = rooms[roomCode];
+    if (!room || room.host !== socket.id) return;
+    if (room.queue.length > 0) {
+      const next = room.queue.shift();
+      room.currentTrack = next;
+      io.to(roomCode).emit('load_track', next);
+      io.to(roomCode).emit('queue_update', room.queue);
+      // Auto-play next track after a short delay for clients to load
+      setTimeout(() => {
+        io.to(roomCode).emit('play', { time: 0 });
+      }, 1500);
+    } else {
+      room.currentTrack = null;
     }
   });
 
